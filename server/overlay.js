@@ -41,24 +41,37 @@ class OverlayHub {
   /** 取游标之后的新指令，同时返回服务端保留的最小游标 */
   since(cursor) {
     const c = Number(cursor) || 0;
-    let commands = this.log.filter((e) => e.seq > c).map((e) => e.command);
+    const now = Date.now();
+    // 超过这个时长的「播报类」指令会被丢弃：悬浮层离线很久后重连时，
+    // 不该突然念出十几分钟前那次领养/任务完成的台词。
+    const STALE_MS = Number(process.env.OVERLAY_STALE_MS || 5 * 60 * 1000);
+
+    let entries = this.log.filter((e) => e.seq > c);
 
     // 悬浮层离线较久时，积压的指令会在重连瞬间一次性下发（可能连播十几句）。
     // 这里做折叠：只保留「最后一只宠物」与「最后一条要播的指令」。
-    if (commands.length > 8) {
+    if (entries.length > 8) {
       const lastOf = (type) => {
-        for (let i = commands.length - 1; i >= 0; i--) if (commands[i].type === type) return commands[i];
+        for (let i = entries.length - 1; i >= 0; i--) if (entries[i].command.type === type) return entries[i];
         return null;
       };
       const keep = [];
-      const pet = lastOf('pet');
-      const speak = lastOf('speak');
-      const quit = lastOf('quit');
-      if (pet) keep.push(pet);
-      if (speak) keep.push(speak);
-      if (quit) keep.push(quit);
-      commands = keep;
+      for (const t of ['pet', 'speak', 'quit']) {
+        const e = lastOf(t);
+        if (e) keep.push(e);
+      }
+      entries = keep;
     }
+
+    // 丢弃过期的播报（pet / quit 属于状态同步，永远保留）
+    const commands = entries
+      .filter((e) => {
+        const type = e.command.type;
+        if (type === 'pet' || type === 'quit') return true;
+        const at = Date.parse(e.at);
+        return !Number.isFinite(at) || now - at <= STALE_MS;
+      })
+      .map((e) => e.command);
 
     return { cursor: this.seq, commands, oldest: this.log.length ? this.log[0].seq : this.seq };
   }
