@@ -1,0 +1,31 @@
+# 依赖（本项目零运行时依赖，此目录理论上不会出现）
+node_modules/
+
+# 本地配置与密钥 —— 绝对不要提交
+.env
+.env.local
+
+# 生成的运行时数据
+server/data/generated/*.tmp
+server/data/generated/voice/
+server/data/generated/subtitles/
+# 个人领养记录（属于本机状态，不进仓库）
+server/data/generated/adoptions.json
+
+# 桌面悬浮层的诊断日志（exe 本身保留，25KB，方便直接双击 start.cmd）
+desktop/PetOverlay.log
+
+# 调试产物（保留 docs/screenshots 供 README 引用）
+.shots/
+.browser-profile*/
+_probe/
+_dsh_probe/
+*.log
+npm-debug.log*
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

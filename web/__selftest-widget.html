@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>PetWidget 拖动自检</title>
+<link rel="stylesheet" href="/styles.css" />
+<style>
+  #out { position: relative; z-index: 999; background: #fff; color: #111; font: 13px/1.7 monospace;
+         white-space: pre-wrap; padding: 16px; margin: 0; }
+  .sky, .topbar, .page, .pet__bar { display: none !important; }
+</style>
+</head>
+<body>
+<pre id="out">running…</pre>
+
+<!-- 挂件的真实 DOM 结构（复制自 index.html），以便 CSS 与 getBoundingClientRect 真实生效 -->
+<div class="pet" id="petWidget" style="right:28px;bottom:28px">
+  <div class="pet__bubble" id="petBubble" hidden>
+    <div class="pet__bubble-ja" id="petBubbleJa"></div>
+    <div class="pet__bubble-zh" id="petBubbleZh"></div>
+    <div class="pet__bubble-tail"></div>
+  </div>
+  <div class="pet__stage" id="petStage" role="button" tabindex="0">
+    <div class="pet__shadow"></div>
+    <img class="pet__img" id="petImg" alt="" draggable="false" />
+    <div class="pet__badge" id="petBadge" hidden></div>
+    <div class="pet__hint" id="petHint">拖我 · 点我</div>
+  </div>
+  <div class="pet__bar">
+    <button class="pet__btn" id="petOpen" type="button">领养所</button>
+    <button class="pet__btn" id="petTalk" type="button">说话</button>
+    <button class="pet__btn" id="petReset" type="button">归位</button>
+  </div>
+</div>
+
+<script>
+  // 尽早暴露任何脚本错误，方便无头环境下排查
+  window.__errors = [];
+  window.addEventListener('error', (e) => {
+    window.__errors.push(String(e.message) + ' @ ' + (e.filename || '') + ':' + (e.lineno || ''));
+    var o = document.getElementById('out');
+    if (o) o.textContent = 'PAGE_ERROR: ' + window.__errors.join(' | ');
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    window.__errors.push('unhandledrejection: ' + String(e.reason));
+    var o = document.getElementById('out');
+    if (o) o.textContent = 'PAGE_REJECTION: ' + window.__errors.join(' | ');
+  });
+</script>
+<script type="module">
+import { PetWidget } from '/js/widget.js';
+
+const log = [];
+let pass = 0, fail = 0;
+const out = document.getElementById('out');
+out.textContent = 'module loaded, running tests…';
+
+function check(name, cond, extra = '') {
+  if (cond) { pass++; log.push(`PASS  ${name}${extra ? '  — ' + extra : ''}`); }
+  else { fail++; log.push(`FAIL  ${name}${extra ? '  — ' + extra : ''}`); }
+}
+
+const root = document.getElementById('petWidget');
+const stage = document.getElementById('petStage');
+const img = document.getElementById('petImg');
+const bubble = document.getElementById('petBubble');
+
+// 1x1 透明 gif，避免图片加载影响布局
+img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+
+let clicks = 0;
+const widget = new PetWidget({
+  root, stage, img, bubble,
+  onClick: () => { clicks++; },
+});
+
+try { localStorage.removeItem('dsh.desktop-pet.position.v1'); } catch {}
+
+const rectOf = (elm) => elm.getBoundingClientRect();
+const nearRight = (r) => Math.abs(window.innerWidth - r.right - 28) < 3;
+const nearBottom = (r) => Math.abs(window.innerHeight - r.bottom - 28) < 3;
+
+function pointer(type, x, y) {
+  const ev = new PointerEvent(type, {
+    clientX: x, clientY: y, pointerId: 1, pointerType: 'mouse',
+    button: 0, buttons: type === 'pointerup' ? 0 : 1, bubbles: true, cancelable: true,
+  });
+  stage.dispatchEvent(ev);
+}
+
+async function run() {
+  await new Promise((r) => setTimeout(r, 60));
+
+  // --- 1. 初始位置在右下角 ---
+  let r = rectOf(root);
+  check('初始位置在视口右下角', nearRight(r) && nearBottom(r),
+    `right-gap=${(window.innerWidth - r.right).toFixed(1)} bottom-gap=${(window.innerHeight - r.bottom).toFixed(1)}`);
+
+  // --- 2. 拖动会移动挂件，且不触发点击 ---
+  const c0 = { x: r.left + r.width / 2, y: r.top + 20 };
+  clicks = 0;
+  pointer('pointerdown', c0.x, c0.y);
+  pointer('pointermove', c0.x - 300, c0.y - 260);
+  pointer('pointermove', c0.x - 420, c0.y - 320);
+  pointer('pointerup', c0.x - 420, c0.y - 320);
+  await new Promise((r2) => setTimeout(r2, 30));
+
+  const r2 = rectOf(root);
+  const moved = Math.abs(r2.left - r.left) > 100 && Math.abs(r2.top - r.top) > 100;
+  check('拖动后挂件位置改变', moved,
+    `Δleft=${(r2.left - r.left).toFixed(1)} Δtop=${(r2.top - r.top).toFixed(1)}`);
+  check('拖动不触发点击回调', clicks === 0, `clicks=${clicks}`);
+  check('拖动后坐标由 left/top 表达', root.style.left !== '' && root.style.top !== '',
+    `style.left=${root.style.left} style.top=${root.style.top}`);
+
+  // --- 3. 位置被持久化 ---
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem('dsh.desktop-pet.position.v1') || 'null'); } catch {}
+  check('拖动后位置写入 localStorage',
+    saved && Math.abs(saved.left - r2.left) < 2 && Math.abs(saved.top - r2.top) < 2,
+    saved ? `saved=(${saved.left.toFixed(0)},${saved.top.toFixed(0)})` : 'null');
+
+  // --- 4. 小幅移动（小于阈值）算点击 ---
+  clicks = 0;
+  const c4 = { x: r2.left + r2.width / 2, y: r2.top + 20 };
+  pointer('pointerdown', c4.x, c4.y);
+  pointer('pointermove', c4.x + 2, c4.y + 2);
+  pointer('pointerup', c4.x + 2, c4.y + 2);
+  await new Promise((r3) => setTimeout(r3, 30));
+  check('位移小于阈值判定为点击', clicks === 1, `clicks=${clicks}`);
+
+  // --- 5. 完全不动也是点击 ---
+  clicks = 0;
+  pointer('pointerdown', c4.x, c4.y);
+  pointer('pointerup', c4.x, c4.y);
+  await new Promise((r4) => setTimeout(r4, 30));
+  check('原地按下抬起判定为点击', clicks === 1, `clicks=${clicks}`);
+
+  // --- 6. 拖出视口会被钳制回可视区域 ---
+  pointer('pointerdown', c4.x, c4.y);
+  pointer('pointermove', -5000, -5000);
+  pointer('pointerup', -5000, -5000);
+  await new Promise((r5) => setTimeout(r5, 30));
+  const r6 = rectOf(root);
+  check('向左上拖出视口被钳制', r6.left >= 0 && r6.top >= 0,
+    `left=${r6.left.toFixed(1)} top=${r6.top.toFixed(1)}`);
+
+  pointer('pointerdown', r6.left + 10, r6.top + 10);
+  pointer('pointermove', 99999, 99999);
+  pointer('pointerup', 99999, 99999);
+  await new Promise((r7) => setTimeout(r7, 30));
+  const r7b = rectOf(root);
+  check('向右下拖出视口被钳制',
+    r7b.right <= window.innerWidth + 0.5 && r7b.bottom <= window.innerHeight + 0.5,
+    `right=${r7b.right.toFixed(1)}/${window.innerWidth} bottom=${r7b.bottom.toFixed(1)}/${window.innerHeight}`);
+
+  // --- 7. 归位回到右下角 ---
+  widget.reset({ animate: false });
+  await new Promise((r8) => setTimeout(r8, 60));
+  const r8b = rectOf(root);
+  check('reset() 回到右下角', nearRight(r8b) && nearBottom(r8b),
+    `right-gap=${(window.innerWidth - r8b.right).toFixed(1)} bottom-gap=${(window.innerHeight - r8b.bottom).toFixed(1)}`);
+  check('reset() 清除 localStorage',
+    localStorage.getItem('dsh.desktop-pet.position.v1') === null);
+
+  // --- 8. 气泡：显示 / 隐藏 / 说话动画 ---
+  widget.showLine({ ja: 'となりのトトロ', zh: '龙猫' }, { duration: 0 });
+  check('showLine 显示气泡',
+    bubble.hidden === false && root.classList.contains('is-speaking'));
+  check('showLine 写入日语与中文',
+    bubble.querySelector('.pet__bubble-ja').textContent === 'となりのトトロ' &&
+    bubble.querySelector('.pet__bubble-zh').textContent === '龙猫');
+  widget.hideBubble();
+  check('hideBubble 隐藏气泡', bubble.hidden === true);
+
+  // --- 9. renderPet ---
+  widget.renderPet({ id: 'totoro-totoro', name: '龙猫', nameJa: 'トトロ', image: '/pets/totoro-totoro.jpg' });
+  check('renderPet 更新图片与 id',
+    root.dataset.petId === 'totoro-totoro' && img.getAttribute('src') === '/pets/totoro-totoro.jpg');
+
+  // --- 10. 键盘可访问性 ---
+  clicks = 0;
+  stage.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  check('Enter 键等同点击', clicks === 1, `clicks=${clicks}`);
+
+  out.textContent =
+    `PetWidget 自检结果：${pass} 通过 / ${fail} 失败\n` +
+    `视口 ${window.innerWidth}x${window.innerHeight}\n` +
+    '--------------------------------------------\n' +
+    log.join('\n') +
+    `\n--------------------------------------------\nRESULT=${fail === 0 ? 'ALL_PASS' : 'HAS_FAILURE'}`;
+  document.title = fail === 0 ? 'ALL_PASS' : 'HAS_FAILURE';
+  window.__selftest = { pass, fail };
+}
+
+run().catch((err) => {
+  out.textContent = 'SELFTEST_CRASH: ' + (err && err.stack || err);
+  window.__selftest = { pass, fail: fail + 1, crash: String(err) };
+});
+</script>
+</body>
+</html>

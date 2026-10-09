@@ -1,0 +1,35 @@
+{
+  "name": "ghibli-desktop-pet",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AI 桌面宠物领养系统 —— 右下角可拖动的吉卜力角色宠物 + DeepSeek 生成的领养文案",
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "dev:api": "node --watch server/index.js",
+    "dev:web": "node tools/serve-web.mjs",
+    "test": "node tools/smoke-test.mjs",
+    "test:dsh": "node tools/test-dsh-watcher.mjs",
+    "pet": "powershell -ExecutionPolicy Bypass -NoProfile -File desktop/build.ps1 -Run",
+    "pet:build": "powershell -ExecutionPolicy Bypass -NoProfile -File desktop/build.ps1",
+    "pet:stop": "taskkill /IM PetOverlay.exe /F",
+    "voice:clips": "node tools/build-voice-clips.mjs",
+    "gen:copy": "node tools/generate-copy.mjs",
+    "gen:copy:force": "node tools/generate-copy.mjs --force",
+    "fetch:pets": "node tools/fetch-pets.mjs",
+    "build:catalog": "node tools/build-catalog.mjs"
+  },
+  "keywords": [
+    "desktop-pet",
+    "ghibli",
+    "deepseek",
+    "ai",
+    "adoption"
+  ],
+  "license": "MIT",
+  "dependencies": {}
+}
