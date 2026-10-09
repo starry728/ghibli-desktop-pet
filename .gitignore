@@ -29,3 +29,6 @@ npm-debug.log*
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# 桌面悬浮层下载音频的落盘目录（多目录回退的第一选择）
+desktop/audio-cache/

@@ -594,8 +594,7 @@ namespace PetOverlay
         /// <summary>下载音频到本地临时文件，返回本地路径</summary>
         string DownloadToTemp(string url)
         {
-            string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "pet-overlay-audio");
-            Directory.CreateDirectory(dir);
+            string dir = ResolveAudioDir();
 
             string ext = System.IO.Path.GetExtension(new Uri(url).AbsolutePath);
             if (string.IsNullOrEmpty(ext)) ext = ".bin";
@@ -617,6 +616,58 @@ namespace PetOverlay
             }
             return local;
         }
+
+        /// <summary>
+        /// 选一个**确实能写**的目录来放临时音频。
+        ///
+        /// 为什么不能直接用 %TEMP%：
+        ///   MCI 播放 MP3 需要真实文件路径，所以必须落盘。但 %TEMP% 不一定可写 ——
+        ///   实测就踩到过「对路径 …\Temp\pet-overlay-audio 的访问被拒绝」，
+        ///   结果右键说话完全没声音。所以这里逐个候选目录**真的建一下、写一个测试文件**，
+        ///   第一个成功的就用，并把结果写进日志。
+        /// </summary>
+        string ResolveAudioDir()
+        {
+            if (_audioDir != null) return _audioDir;
+
+            var candidates = new List<string>();
+            // 1) 程序自己的目录（项目目录，一般都可写，最可靠）
+            candidates.Add(System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "audio-cache"));
+            // 2) 用户本地应用数据
+            string localApp = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            if (!string.IsNullOrEmpty(localApp)) candidates.Add(System.IO.Path.Combine(localApp, "GhibliDesktopPet", "audio"));
+            // 3) 系统临时目录（首选子目录，再退到根）
+            candidates.Add(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "pet-overlay-audio"));
+            candidates.Add(System.IO.Path.GetTempPath());
+
+            var errors = new List<string>();
+            foreach (string dir in candidates)
+            {
+                if (string.IsNullOrEmpty(dir)) continue;
+                try
+                {
+                    Directory.CreateDirectory(dir);
+                    string probe = System.IO.Path.Combine(dir, "write-probe.tmp");
+                    File.WriteAllText(probe, "ok");
+                    File.Delete(probe);
+                    _audioDir = dir;
+                    Program.Log("音频临时目录: " + dir);
+                    return _audioDir;
+                }
+                catch (Exception ex)
+                {
+                    errors.Add(dir + " -> " + ex.Message);
+                }
+            }
+
+            // 全都写不进去：记下来，播放时会被上层提示，不再静默
+            Program.Log("!! 找不到可写的音频临时目录：");
+            foreach (string e in errors) Program.Log("     " + e);
+            _audioDir = System.IO.Path.GetTempPath();  // 兜底，失败时会有明确报错
+            return _audioDir;
+        }
+
+        string _audioDir;
 
         /// <summary>
         /// 播放音频。
@@ -649,6 +700,8 @@ namespace PetOverlay
             catch (Exception ex)
             {
                 Program.Log("!! 下载音频失败: " + ex.Message + "  url=" + url);
+                // 不再静默：告诉用户出了什么事，以及去哪里看细节
+                ShowBubble(null, "音频下载失败，放不出声…（细节见 desktop\\PetOverlay.log）");
                 return;
             }
 
@@ -658,7 +711,11 @@ namespace PetOverlay
             StopAudio();
 
             bool ok = ext == ".wav" ? (PlayWav(local) || PlayMci(local)) : (PlayMci(local) || PlayWav(local));
-            if (!ok) Program.Log("!! 播放失败（MCI 与 SoundPlayer 都没成功）: " + local);
+            if (!ok)
+            {
+                Program.Log("!! 播放失败（MCI 与 SoundPlayer 都没成功）: " + local);
+                ShowBubble(null, "系统播放不了这段音频…（细节见 desktop\\PetOverlay.log）");
+            }
 
             // 说话时点头
             var nod = new DoubleAnimation(1.0, 1.06, TimeSpan.FromMilliseconds(220));
