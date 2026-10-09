@@ -65,7 +65,9 @@ async function handleRequest(req, res) {
     return sendError(res, 404, '图片不存在');
   }
 
-  // 2b) 语音：/voice/ 是用户放入的电影原声，/voice-cache/ 是 TTS 合成缓存
+  // 2b) 语音：
+  //   /voice/        用户放入的电影原声（public/voice）
+  //   /voice-cache/  预生成离线语音包（public/voice-cache）→ 运行时缓存（generated/voice）
   if (pathname.startsWith('/voice/')) {
     const served = await serveStatic(req, res, PUBLIC_DIR, pathname);
     if (served) return;
@@ -73,8 +75,9 @@ async function handleRequest(req, res) {
   }
   if (pathname.startsWith('/voice-cache/')) {
     const rel = pathname.slice('/voice-cache'.length) || '/';
-    const served = await serveStatic(req, res, path.join(GENERATED_DIR, 'voice'), rel);
-    if (served) return;
+    // 先找随仓库分发的离线包，再找运行时合成缓存
+    if (await serveStatic(req, res, path.join(PUBLIC_DIR, 'voice-cache'), rel)) return;
+    if (await serveStatic(req, res, path.join(GENERATED_DIR, 'voice'), rel)) return;
     return sendError(res, 404, '语音缓存不存在');
   }
 

@@ -633,7 +633,12 @@ namespace PetOverlay
         /// </summary>
         void Play(string url)
         {
-            if (string.IsNullOrEmpty(url)) return;
+            if (string.IsNullOrEmpty(url))
+            {
+                // 不该再走到这里了（上层会先把「没有音频」的情况提示出来），留个日志兜底
+                Program.Log("!! Play() 收到空音频地址，跳过播放");
+                return;
+            }
             _currentAudio = url;
 
             string local;
@@ -836,8 +841,25 @@ namespace PetOverlay
                 if (!string.IsNullOrEmpty(pid)) _petId = pid;
                 string img = Str(cmd, "imageUrl");
                 if (!string.IsNullOrEmpty(img)) SetPetImage(Absolute(img));
-                ShowBubble(Str(cmd, "ja"), Str(cmd, "zh"));
-                Play(Absolute(Str(cmd, "audioUrl")));
+
+                string ja = Str(cmd, "ja");
+                string zh = Str(cmd, "zh");
+                string audioUrl = Str(cmd, "audioUrl");
+
+                if (string.IsNullOrEmpty(audioUrl))
+                {
+                    // 这里以前是「静默什么都不做」—— 用户右键让它说话，看到气泡闪一下就没了声音，
+                    // 只会以为程序坏了。现在明确告诉他为什么、该怎么办。
+                    string why = Str(cmd, "voiceSource") == "none"
+                        ? "还没有这句话的离线音频，而且当前无法联网合成"
+                        : "这句话的音频没有准备好";
+                    ShowBubble(ja, (string.IsNullOrEmpty(zh) ? "" : zh + "  ") + "（" + why + "）");
+                    Program.Log("!! speak 指令没有 audioUrl，只显示文字。voiceSource=" + Str(cmd, "voiceSource"));
+                    return;
+                }
+
+                ShowBubble(ja, zh);
+                Play(Absolute(audioUrl));
             }
             else if (type == "bubble")
             {
@@ -890,21 +912,77 @@ namespace PetOverlay
             }
         }
 
+        /// <summary>
+        /// 右键菜单「让它说一句」。
+        ///
+        /// 两个曾经的坑，这里都修掉了：
+        ///  1. 以前是在 UI 线程上同步发请求 —— 后端要先合成语音（1~3 秒），
+        ///     期间整个悬浮层是卡住的（动画停、轮询停）。现在丢到后台线程。
+        ///  2. 以前失败只写 Console.Error（winexe 根本没有控制台），完全静默。
+        ///     现在失败会弹气泡明确说明，同时写进 PetOverlay.log。
+        /// </summary>
         void RequestSpeak()
         {
-            try
+            ShowBubble(null, "让我想想说什么…");
+
+            string url = _baseUrl + "/api/overlay/say?pet=" +
+                         Uri.EscapeDataString(_petId == null ? "" : _petId);
+
+            var worker = new Thread(delegate()
             {
-                var req = (HttpWebRequest)WebRequest.Create(_baseUrl + "/api/overlay/say?pet=" + Uri.EscapeDataString(_petId == null ? "" : _petId));
-                req.Method = "POST";
-                req.ContentLength = 0;
-                req.Proxy = null;
-                req.Timeout = 5000;
-                using (req.GetResponse()) { }
-            }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine("[overlay] 请求说话失败: " + ex.Message);
-            }
+                string body = null;
+                string error = null;
+                try
+                {
+                    var req = (HttpWebRequest)WebRequest.Create(url);
+                    req.Method = "POST";
+                    req.ContentLength = 0;
+                    req.Proxy = null;
+                    req.Timeout = 10000;
+                    req.ReadWriteTimeout = 10000;
+                    using (var resp = (HttpWebResponse)req.GetResponse())
+                    using (var reader = new StreamReader(resp.GetResponseStream(), Encoding.UTF8))
+                    {
+                        body = reader.ReadToEnd();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    error = ex.Message;
+                }
+
+                Dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(delegate
+                {
+                    if (error != null)
+                    {
+                        Program.Log("!! RequestSpeak 失败: " + error + "  url=" + url);
+                        ShowBubble(null, "连不上后端，说不了话… 请确认 npm start 正在运行");
+                        return;
+                    }
+                    Program.Log("RequestSpeak -> " + body);
+                    try
+                    {
+                        var d = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(body);
+                        bool ok = false;
+                        string audio = "";
+                        object o;
+                        if (d != null && d.TryGetValue("ok", out o) && o != null) ok = Convert.ToBoolean(o);
+                        if (d != null && d.TryGetValue("audio", out o) && o != null) audio = Convert.ToString(o);
+
+                        if (!ok || string.IsNullOrEmpty(audio))
+                        {
+                            ShowBubble(null, "这句话暂时没有可播放的音频（离线语音包里没有它，也无法联网合成）");
+                        }
+                        // 有音频时不用在这里播：下一条轮询指令会带着它，由 HandleCommand 统一播放
+                    }
+                    catch (Exception ex)
+                    {
+                        Program.Log("!! RequestSpeak 响应解析失败: " + ex.Message);
+                    }
+                }));
+            });
+            worker.IsBackground = true;
+            worker.Start();
         }
     }
 }

@@ -18,6 +18,7 @@
     "pet:build": "powershell -ExecutionPolicy Bypass -NoProfile -File desktop/build.ps1",
     "pet:stop": "taskkill /IM PetOverlay.exe /F",
     "voice:clips": "node tools/build-voice-clips.mjs",
+    "voice:prebuild": "node tools/prebuild-voice.mjs",
     "gen:copy": "node tools/generate-copy.mjs",
     "gen:copy:force": "node tools/generate-copy.mjs --force",
     "fetch:pets": "node tools/fetch-pets.mjs",

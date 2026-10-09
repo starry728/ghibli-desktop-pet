@@ -15,7 +15,7 @@ import { generateCopy, copyJobStatus, stopCopyJob, fallbackCopy } from './copywr
 import { ping, DeepSeekError } from './deepseek.js';
 import { overlayHub, defaultCompanionPet } from './overlay.js';
 import { getDshWatcher } from './dsh-watcher.js';
-import { resolveLineAudio, resolveApprovalAudio, resolveSayAudio, listOriginalVoicePets, STYLE_PRESETS, APPROVAL_TEXT } from './voice.js';
+import { resolveLineAudio, resolveApprovalAudio, resolveSayAudio, listOriginalVoicePets, prebuiltVoiceStatus, STYLE_PRESETS, APPROVAL_TEXT } from './voice.js';
 import { resolveApiKey, maskKey, DEEPSEEK_MODEL, DEEPSEEK_BASE_URL, PORT, HOST } from './config.js';
 
 function boolParam(v) {
@@ -47,6 +47,7 @@ export const routes = [
     async handler(req, res) {
       const { key, source, envVar } = resolveApiKey({ refresh: true });
       const stats = await getStats();
+      const prebuilt = prebuiltVoiceStatus();
       sendJson(res, 200, {
         ok: true,
         service: 'desktop-pet-adoption',
@@ -59,6 +60,15 @@ export const routes = [
           maskedKey: maskKey(key),
           model: DEEPSEEK_MODEL,
           baseUrl: DEEPSEEK_BASE_URL,
+        },
+        voice: {
+          prebuiltReady: prebuilt.ready,
+          prebuiltFiles: prebuilt.files,
+          prebuiltBytes: prebuilt.bytes,
+          originalVoice: Object.keys(listOriginalVoicePets()).length,
+          note: prebuilt.ready
+            ? '离线语音包已就绪，断网也能让宠物说话'
+            : '离线语音包为空：需要联网合成一次，或运行 npm run voice:prebuild',
         },
         catalog: stats,
         copyJob: copyJobStatus(),

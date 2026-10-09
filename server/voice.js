@@ -4,7 +4,10 @@
  * 优先级：
  *   1. 原声文件  public/voice/<petId>.mp3|.wav|.m4a|.ogg
  *      —— 用户自己放入的电影原声片段，程序不会覆盖、也不会自动下载
- *   2. Edge TTS 合成（日语），缓存到 server/data/generated/voice/
+ *   2. 预生成离线语音包  public/voice-cache/<hash>.mp3
+ *      —— 随仓库分发，断网也能说话，点击即时出声（tools/prebuild-voice.mjs 生成）
+ *   3. 运行时 TTS 缓存   server/data/generated/voice/
+ *   4. 现场调用 Edge TTS 合成（需要联网）
  *
  * 这样设计的原因：电影原声属于版权素材，无法自动获取；
  * 但只要你把剪好的音频丢进 public/voice/，整套流程立刻切换成原声，无需改代码。
@@ -17,7 +20,16 @@ import { PUBLIC_DIR, GENERATED_DIR } from './config.js';
 import { synthesize, VOICES, SUSU_STYLE, STYLE_PRESETS, APPROVAL_TEXT } from './lib/edge-tts.js';
 
 export const VOICE_DIR = path.join(PUBLIC_DIR, 'voice');            // 用户提供的原声
-export const VOICE_CACHE_DIR = path.join(GENERATED_DIR, 'voice');   // TTS 缓存
+export const VOICE_CACHE_DIR = path.join(GENERATED_DIR, 'voice');   // TTS 运行时缓存
+/**
+ * 预生成的离线语音包（随仓库分发，见 tools/prebuild-voice.mjs）。
+ *
+ * 为什么需要它：Edge TTS 是**在线**服务。
+ *   · 断网时合成必然失败 → audioUrl 为空 → 桌面宠物静默什么都不做，用户以为坏了
+ *   · 即使联网，第一次说话要等 1~3 秒（正在合成），期间悬浮层界面是卡住的
+ * 把所有台词和批准提醒预生成到这里之后，断网也能说话，点击也是即时的。
+ */
+export const PREBUILT_VOICE_DIR = path.join(PUBLIC_DIR, 'voice-cache');
 
 const ORIGINAL_EXTS = ['.mp3', '.wav', '.m4a', '.ogg', '.opus', '.flac', '.aac'];
 
@@ -85,15 +97,52 @@ export async function ttsCached(text, opts = {}) {
     volume: opts.volume || '+0%',
   };
   const name = `${cacheKey(text, full)}.${format}`;
-  const file = path.join(VOICE_CACHE_DIR, name);
 
-  if (fs.existsSync(file) && fs.statSync(file).size > 512) {
-    return { url: '/voice-cache/' + name, file, cached: true, bytes: fs.statSync(file).size, format };
+  // 0) 预生成的离线语音包优先：命中就不用联网，也不会让用户等合成
+  const prebuilt = path.join(PREBUILT_VOICE_DIR, name);
+  if (fs.existsSync(prebuilt) && fs.statSync(prebuilt).size > 512) {
+    return {
+      url: '/voice-cache/' + name,
+      file: prebuilt,
+      cached: true,
+      prebuilt: true,
+      bytes: fs.statSync(prebuilt).size,
+      format,
+    };
   }
 
+  // 1) 运行时缓存
+  const file = path.join(VOICE_CACHE_DIR, name);
+  if (fs.existsSync(file) && fs.statSync(file).size > 512) {
+    return { url: '/voice-cache/' + name, file, cached: true, prebuilt: false, bytes: fs.statSync(file).size, format };
+  }
+
+  // 2) 现场合成（需要联网）
   const buf = await synthesize(text, { ...full, format });
   await fsp.writeFile(file, buf);
-  return { url: '/voice-cache/' + name, file, cached: false, bytes: buf.length, format };
+
+  // 合成成功后顺手补进离线包目录，下次断网也能用
+  try {
+    if (format === 'mp3' && fs.existsSync(PREBUILT_VOICE_DIR)) {
+      await fsp.copyFile(file, path.join(PREBUILT_VOICE_DIR, name));
+    }
+  } catch { /* 补写失败不影响本次播放 */ }
+
+  return { url: '/voice-cache/' + name, file, cached: false, prebuilt: false, bytes: buf.length, format };
+}
+
+/** 离线语音包是否就绪（供 /api/health 与前端提示使用） */
+export function prebuiltVoiceStatus() {
+  try {
+    const files = fs.readdirSync(PREBUILT_VOICE_DIR).filter((f) => f.endsWith('.mp3') || f.endsWith('.wav'));
+    let bytes = 0;
+    for (const f of files) {
+      try { bytes += fs.statSync(path.join(PREBUILT_VOICE_DIR, f)).size; } catch { /* ignore */ }
+    }
+    return { dir: PREBUILT_VOICE_DIR, files: files.length, bytes, ready: files.length > 0 };
+  } catch {
+    return { dir: PREBUILT_VOICE_DIR, files: 0, bytes: 0, ready: false };
+  }
 }
 
 /**
